@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pydowser"
+version = "0.1.0"
+description = "Pure-Python port of the R/CRAN package dowser - B-cell receptor phylogenetics: lineage trees, measurable evolution, migration/differentiation tests (Immcantation)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Zehua Zeng", email = "starlitnightly@163.com" },
+]
+keywords = [
+    "B-cell-receptor", "phylogenetics", "lineage-trees", "BCR", "AIRR",
+    "Immcantation", "dowser", "maximum-parsimony", "measurable-evolution",
+    "class-switching", "immunoglobulin", "repertoire",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.10",
+    "pandas>=1.5",
+    "matplotlib>=3.6",
+    "biopython>=1.79",
+    "pyalakazam>=0.1",
+    "pyshazam>=0.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-cov", "ruff", "build"]
+
+[project.urls]
+Homepage = "https://github.com/omicverse/py-dowser"
+Repository = "https://github.com/omicverse/py-dowser"
+Issues = "https://github.com/omicverse/py-dowser/issues"
+"Upstream CRAN package" = "https://cran.r-project.org/package=dowser"
+"Immcantation framework" = "https://immcantation.readthedocs.io/"
+"Upstream (omicverse)" = "https://github.com/Starlitnightly/omicverse"
+
+[tool.setuptools.packages.find]
+include = ["pydowser*"]
+exclude = ["tests*", "examples*", "dowser-ref*"]
+
+[tool.setuptools.package-data]
+pydowser = ["data/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+    "ignore::RuntimeWarning",
+]
