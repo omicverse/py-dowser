@@ -13,7 +13,7 @@ import numpy as np
 
 from .phylo import Phylo
 
-__all__ = ["getPalette", "plotTrees", "plotTree"]
+__all__ = ["getPalette", "plotTrees", "plotTree", "condenseTrees"]
 
 # a qualitative palette (Brewer "Set1"-style) used for trait colouring
 _DEFAULT_COLORS = [
@@ -182,3 +182,63 @@ def plotTrees(clones, trait: Optional[str] = None,
         axes_flat[j].set_visible(False)
     fig.tight_layout()
     return out
+
+
+# ----------------------------------------------------------------------
+def condenseTrees(trees, states, palette: Optional[Dict[str, str]] = None
+                  ) -> Phylo:
+    """Condense equally-parsimonious node labellings into one tree.
+
+    Faithful port of dowser's ``condenseTrees``.  Given a list of copies
+    of the *same* tree carrying alternative (equally-parsimonious) node
+    states, each node is annotated with the sorted set of states it takes
+    across the input trees (joined by ``","``).  Ambiguous internal nodes
+    therefore carry multi-state labels.
+
+    ``trees`` may be a single :class:`~pydowser.phylo.Phylo` or a list of
+    them; ``states`` is the model's state vector (or ``{state: name}``
+    mapping).  Returns a single tree with a ``state`` list (per node) and
+    a ``node_label`` list (per internal node).
+    """
+    if isinstance(trees, Phylo):
+        trees = [trees]
+    if palette is not None:
+        import warnings
+        warnings.warn("palette option is deprecated in condenseTrees")
+    if isinstance(states, dict):
+        state_map = dict(states)
+    else:
+        state_map = {s: s for s in states}
+
+    nt = trees[0].copy()
+    n_total = nt.n_tip + nt.Nnode
+
+    def node_state(tree: Phylo, node: int) -> str:
+        """Best-effort state lookup: node_label, then reconstructed seq."""
+        if tree.is_tip(node):
+            return tree.tip_label[node - 1]
+        nd = tree.nodes.get(node, {})
+        for key in ("state", "comment", "label", "sequence"):
+            v = nd.get(key)
+            if v is not None:
+                return str(v)
+        if tree.node_label is not None:
+            idx = node - tree.n_tip - 1
+            if 0 <= idx < len(tree.node_label):
+                return str(tree.node_label[idx])
+        return ""
+
+    combs: List[str] = []
+    for node in range(1, n_total + 1):
+        labels = set()
+        for tree in trees:
+            lab = node_state(tree, node)
+            labels.add(state_map.get(lab, lab))
+        combs.append(",".join(sorted(s for s in labels if s != "")))
+
+    nt.state = combs
+    nt.node_label = combs[nt.n_tip:]
+    for node in range(1, n_total + 1):
+        nt.nodes.setdefault(node, {})
+        nt.nodes[node]["state"] = combs[node - 1]
+    return nt

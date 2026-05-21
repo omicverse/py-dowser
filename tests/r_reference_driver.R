@@ -85,4 +85,69 @@ cor_df <- data.frame(
 )
 write.csv(cor_df, file.path(out_dir, "correlationtest.csv"), row.names = FALSE)
 
+# -------------------------------------------------------------- createGermlines
+# Reconstruct a germline from a synthetic AIRR row whose V/D/J genes exactly
+# match dowser's bundled minimal 3-gene IMGT reference, so pydowser and R run
+# on identical input and the result must be bit-exact.
+vdj_dir <- system.file("extdata", "germlines", "imgt", "human", "vdj",
+                       package = "dowser")
+imgt <- readIMGT(vdj_dir)
+sv <- toupper(imgt$IGH$V[["IGHV3-11*05"]])
+sd <- toupper(imgt$IGH$D[["IGHD3-10*01"]])
+sj <- toupper(imgt$IGH$J[["IGHJ5*02"]])
+np1 <- 5; np2 <- 7
+fullseq <- paste0(sv, paste(rep("A", np1), collapse = ""), sd,
+                  paste(rep("C", np2), collapse = ""), sj)
+gdf <- data.frame(
+  sequence_id = "s1", sequence_alignment = fullseq, clone_id = "c1",
+  v_call = "IGHV3-11*05", d_call = "IGHD3-10*01", j_call = "IGHJ5*02",
+  v_germline_start = 1, v_germline_end = nchar(sv),
+  d_germline_start = 1, d_germline_end = nchar(sd),
+  j_germline_start = 1, j_germline_end = nchar(sj),
+  np1_length = np1, np2_length = np2, locus = "IGH",
+  stringsAsFactors = FALSE)
+gres <- createGermlines(gdf, imgt)
+write.csv(data.frame(
+  germline_full  = gres$germline_alignment,
+  germline_dmask = gres$germline_alignment_d_mask,
+  stringsAsFactors = FALSE),
+  file.path(out_dir, "creategermlines.csv"), row.names = FALSE)
+
+# ---------------------------------------------------------------- maskCodons
+mc1 <- maskCodons("s1", "ACGACG", "ACGACG")
+mc2 <- maskCodons("s2", "ACGTTTACG", "ACGACG")
+mc3 <- maskCodons("s4", "ACGTTACGTAC", "ACGACGTAC")
+mask_df <- data.frame(
+  case        = c("identical", "clean_insertion", "partial_gap"),
+  masked      = c(ifelse(is.na(mc1$sequence_masked_v), "NA", mc1$sequence_masked_v),
+                  ifelse(is.na(mc2$sequence_masked_v), "NA", mc2$sequence_masked_v),
+                  ifelse(is.na(mc3$sequence_masked_v), "NA", mc3$sequence_masked_v)),
+  note        = c(mc1$masking_note, mc2$masking_note, mc3$masking_note),
+  stringsAsFactors = FALSE)
+write.csv(mask_df, file.path(out_dir, "maskcodons.csv"), row.names = FALSE)
+
+# ---------------------------------------------------------------- makeSkyline
+# Pure-algorithm skyline: build a synthetic BEAST log + trees file and run R
+# makeSkyline on it; pydowser must match bit-exactly.
+sky_dir <- file.path(out_dir, "sky")
+dir.create(sky_dir, showWarnings = FALSE)
+writeLines(c(
+  "Sample\tTreeHeight\tbPopSizes.1\tbPopSizes.2\tbGroupSizes.1\tbGroupSizes.2",
+  "0\t1.0\t10.0\t20.0\t2\t2",
+  "1\t1.2\t12.0\t22.0\t2\t2",
+  "2\t0.9\t9.0\t19.0\t2\t2",
+  "3\t1.1\t11.0\t21.0\t2\t2"), file.path(sky_dir, "x.log"))
+writeLines(c(
+  "#NEXUS", "BEGIN TREES;", "TRANSLATE",
+  "1 t1,", "2 t2,", "3 t3,", "4 t4,", "5 t5;",
+  "tree STATE_0 = ((1:0.5,2:0.5):0.5,(3:0.3,(4:0.1,5:0.1):0.2):0.7):0.0;",
+  "tree STATE_1 = ((1:0.6,2:0.6):0.6,(3:0.4,(4:0.2,5:0.2):0.2):0.8):0.0;",
+  "tree STATE_2 = ((1:0.45,2:0.45):0.45,(3:0.25,(4:0.1,5:0.1):0.15):0.65):0.0;",
+  "tree STATE_3 = ((1:0.55,2:0.55):0.55,(3:0.35,(4:0.15,5:0.15):0.2):0.75):0.0;",
+  "END;"), file.path(sky_dir, "x.trees"))
+sky <- makeSkyline(file.path(sky_dir, "x.log"), file.path(sky_dir, "x.trees"),
+                   burnin = 0, bins = 10, clone_id = "c1", max_height = "min")
+write.csv(as.data.frame(sky), file.path(out_dir, "makeskyline.csv"),
+          row.names = FALSE)
+
 cat("R reference driver complete.\n")

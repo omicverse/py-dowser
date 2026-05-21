@@ -23,7 +23,8 @@ __all__ = [
     "buildPratchet", "buildPML", "getTrees", "rerootTree", "getDivergence",
     "getPathLengths", "getBootstraps", "collapseNodes", "scaleBranches",
     "resolvePolytomies", "getNodeSeq", "getSeq", "calcRF", "parsimonyScore",
-    "di2multi", "readFasta", "writeFasta",
+    "di2multi", "readFasta", "writeFasta", "checkDivergence", "getSubTaxa",
+    "getAllSeqs", "downsampleClone", "bootstrapTrees",
 ]
 
 
@@ -705,3 +706,226 @@ def getBootstraps(clones: pd.DataFrame, bootstraps: int = 100,
     out["bootstrap_trees"] = boot_lists
     out["trees"] = supports
     return out
+
+
+# ----------------------------------------------------------------------
+def _seq_dist(a: str, b: str) -> float:
+    """IUPAC-aware Hamming distance (matches ``alakazam::seqDist``)."""
+    try:
+        from pyalakazam import seqDist
+        return float(seqDist(str(a), str(b)))
+    except Exception:  # pragma: no cover - fallback
+        _IUPAC = {"A": 1, "C": 2, "G": 4, "T": 8, "U": 8, "R": 5, "Y": 10,
+                  "S": 6, "W": 9, "K": 12, "M": 3, "B": 14, "D": 13, "H": 11,
+                  "V": 7, "N": 15, "-": 15, ".": 15, "?": 15}
+        d = 0
+        for x, y in zip(str(a), str(b)):
+            if _IUPAC.get(x.upper(), 15) & _IUPAC.get(y.upper(), 15) == 0:
+                d += 1
+        return float(d)
+
+
+def checkDivergence(clones: pd.DataFrame, threshold: float = -1,
+                    verbose: bool = True, germline: str = "Germline",
+                    data_type: str = "DNA") -> pd.DataFrame:
+    """Compare tree divergence with germline Hamming distance per node.
+
+    Faithful port of dowser's ``checkDivergence``.  For every node the
+    tree-based divergence (summed branch length in mutations) is compared
+    with the node's Hamming distance from the germline.  Divergence should
+    never fall below the Hamming distance; a warning is emitted whenever
+    ``divergence - hamming`` drops below ``threshold`` (a poor model-fit
+    indicator).
+
+    Returns a data frame with columns ``clone``, ``hamming``,
+    ``divergence``, ``diff`` and ``node``.
+    """
+    if "trees" not in clones.columns:
+        raise ValueError("trees column not found in input object!")
+    edge_types = {t.edge_type for t in clones["trees"]}
+    if len(edge_types) > 1:
+        raise ValueError("Can't work with mixture of scaled and unscaled "
+                         "branch lengths")
+    if edge_types != {"mutations"}:
+        scaled = scaleBranches(clones, edge_type="mutations")
+    else:
+        scaled = clones
+
+    warned = False
+    rows = []
+    for i, row in scaled.reset_index(drop=True).iterrows():
+        phy = row["trees"]
+        gnode = phy.get_tip_index(germline)
+        D = phy.dist_nodes()
+        divs = D[1:phy.n_tip + phy.Nnode + 1, gnode]
+        n_total = phy.n_tip + phy.Nnode
+        seqs = [phy.nodes.get(n, {}).get("sequence") for n in
+                range(1, n_total + 1)]
+        uca = seqs[gnode - 1]
+        for n in range(1, n_total + 1):
+            ham = (_seq_dist(uca, seqs[n - 1])
+                   if uca is not None and seqs[n - 1] is not None else 0)
+            diff = float(divs[n - 1]) - ham
+            rows.append({"clone": row["clone_id"], "hamming": ham,
+                         "divergence": float(divs[n - 1]), "diff": diff,
+                         "node": n})
+        df = pd.DataFrame([r for r in rows if r["clone"] == row["clone_id"]])
+        if df["diff"].min() < threshold:
+            warned = True
+            mind = df["diff"].min()
+            sumd = int((df["diff"] < threshold).sum())
+            tipd = int((df["diff"].iloc[:phy.n_tip] < threshold).sum())
+            warnings.warn(
+                f"divergence_check: Clone {row['clone_id']}, {tipd} tips and "
+                f"{sumd - tipd} internal nodes are less diverged than their "
+                f"Hamming distance from the germline than threshold "
+                f"{threshold}. Biggest difference: {mind} mutations. Usually "
+                "indicates poor model fit.")
+    if not warned and verbose:
+        print(f"Tested {len(scaled)} trees and all passed.")
+    return pd.DataFrame(rows)
+
+
+# ----------------------------------------------------------------------
+def getSubTaxa(node: int, tree: Phylo) -> List[str]:
+    """Return the tip labels of the clade defined by ``node``.
+
+    Faithful port of dowser's ``getSubTaxa``.
+    """
+    n_total = tree.n_tip + tree.Nnode
+    if node > n_total:
+        raise ValueError(f"Node {node} too large for tree")
+    children = tree.children(node)
+    if not children:
+        if node > tree.n_tip:
+            raise ValueError(f"Malformed base case at node {node}")
+        return [tree.tip_label[node - 1]]
+    tips: List[str] = []
+    for c in children:
+        tips.extend(getSubTaxa(c, tree))
+    return tips
+
+
+# ----------------------------------------------------------------------
+def getAllSeqs(data: pd.DataFrame, imgt_gaps: bool = True) -> pd.DataFrame:
+    """Return all tip and internal-node sequences of a set of trees.
+
+    Faithful port of dowser's ``getAllSeqs``.  For every node of every
+    tree the reconstructed (internal) or observed (tip) sequence is
+    returned, one row per node per locus.
+
+    Returns a data frame with columns ``clone_id``, ``node_id``, ``node``,
+    ``locus``, ``sequence`` (and ``sequence_alignment`` if
+    ``imgt_gaps=True``).
+    """
+    if "trees" not in data.columns:
+        raise ValueError("No trees found")
+    rows = []
+    for _, row in data.iterrows():
+        tree = row["trees"]
+        clone = row["data"]
+        n_total = tree.n_tip + tree.Nnode
+        loci = list(dict.fromkeys(clone.locus))
+        for n in range(1, n_total + 1):
+            node_id = (tree.tip_label[n - 1] if n <= tree.n_tip
+                       else f"Node{n}")
+            for locus in loci:
+                seq = _node_locus_seq(tree, clone, n, locus, gaps=False)
+                rec = {"clone_id": row["clone_id"], "node_id": node_id,
+                       "node": n, "locus": locus, "sequence": seq}
+                if imgt_gaps:
+                    rec["sequence_alignment"] = _node_locus_seq(
+                        tree, clone, n, locus, gaps=True)
+                rows.append(rec)
+    return pd.DataFrame(rows)
+
+
+def _node_locus_seq(tree: Phylo, clone: AirrClone, node: int, locus: str,
+                    gaps: bool) -> str:
+    """Return one node's sequence for a single locus (dowser getNodeSeq core)."""
+    seq = tree.nodes.get(node, {}).get("sequence")
+    if seq is None:
+        return ""
+    chars = list(seq)
+    loc = list(clone.locus)
+    if len(chars) > len(loc):
+        raise ValueError("Sequences are longer than chain vector. Exiting")
+    lseq = [chars[i] if chars[i] else "N"
+            for i in range(len(loc)) if loc[i] == locus]
+    if gaps:
+        nums = [clone.numbers[i] for i in range(len(loc))
+                if loc[i] == locus]
+        if nums:
+            out = ["."] * max(nums)
+            for num, ch in zip(nums, lseq):
+                out[num - 1] = ch
+            lseq = out
+    return "".join(lseq)
+
+
+# ----------------------------------------------------------------------
+def downsampleClone(clone: AirrClone, trait: str, tip_switch: int = 20,
+                    tree: Optional[Phylo] = None, seed: int = 1) -> dict:
+    """Down-sample a clone to a maximum tip/switch ratio (dowser ``downsampleClone``).
+
+    Faithful port of dowser's ``downsampleClone``.  At least one sequence
+    of each ``trait`` state is retained; if the resulting tip count would
+    exceed ``tip_switch`` switches the remaining tips are randomly
+    removed.  When a ``tree`` is supplied its corresponding tips are
+    dropped too.
+
+    Returns ``{"clone": AirrClone, "tree": Phylo or None}``.  ``seed``
+    makes the random down-sampling reproducible.
+    """
+    rng = np.random.default_rng(seed)
+    cdata = clone.data.copy()
+    if trait not in cdata.columns:
+        raise ValueError(f"{trait} not found in clone data columns")
+    states = list(pd.unique(cdata[trait]))
+    if any(pd.isna(s) for s in states):
+        raise ValueError("NA trait values detected, must be removed before "
+                         "trait analysis.")
+
+    out_tree = tree
+    if len(states) > 1:
+        if tip_switch < len(states) / (len(states) - 1):
+            raise ValueError(
+                f"clone {clone.clone} tip/switch ratio = {tip_switch} not "
+                f"possible with {len(states)} states")
+        ntips = len(cdata)
+        saved = []
+        for s in states:
+            ids = cdata.loc[cdata[trait] == s, "sequence_id"].tolist()
+            saved.append(str(rng.choice(ids)))
+        if ntips / (len(states) - 1) > tip_switch:
+            target = tip_switch * (len(states) - 1)
+            tips = [t for t in cdata["sequence_id"].astype(str)
+                    if t not in saved]
+            rm = list(rng.choice(tips, size=ntips - target, replace=False))
+            cdata = cdata[~cdata["sequence_id"].astype(str).isin(rm)]
+            if out_tree is not None:
+                from .statistics import _drop_tip
+                t = out_tree
+                for lab in rm:
+                    if lab in t.tip_label:
+                        t = _drop_tip(t, lab)
+                out_tree = t
+    new_clone = clone.copy()
+    new_clone.data = cdata.reset_index(drop=True)
+    return {"clone": new_clone, "tree": out_tree}
+
+
+# ----------------------------------------------------------------------
+def bootstrapTrees(clones: pd.DataFrame, bootstraps: int, trait=None,
+                   build: str = "pratchet", fixtrees: bool = False,
+                   seed: int = 1, **kwargs):
+    """Deprecated alias of :func:`pydowser.findSwitches` (dowser ``bootstrapTrees``).
+
+    dowser deprecated ``bootstrapTrees`` in favour of ``findSwitches``;
+    this port forwards to :func:`pydowser.switches.findSwitches` with the
+    same warning.
+    """
+    warnings.warn("bootstrapTrees is deprecated. Use findSwitches instead.")
+    from .switches import findSwitches
+    return findSwitches(clones, permutations=bootstraps, trait=trait,
+                        fixtrees=fixtrees, build=build, seed=seed, **kwargs)

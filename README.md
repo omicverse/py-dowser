@@ -25,19 +25,32 @@ Depends on the already-ported [`pyalakazam`](https://github.com/omicverse/py-ala
 
 | dowser function | pydowser | notes |
 |---|---|---|
+| `createGermlines`, `readIMGT` | `createGermlines`, `readIMGT` | clonal germline (UCA) reconstruction from an IMGT reference — **bit-exact** |
 | `formatClones`, `makeAirrClone` | `formatClones`, `makeAirrClone` | gap/end masking, duplicate collapse, trait handling, IMGT regions |
+| `maskCodons`, `maskSequences` | same names | mask V-gene codons split by insertions — deterministic, R-parity |
+| `resolveLightChains`, `getSubclones` | same names | light-chain V/J subgroup resolution (`getSubclones` deprecated → error) |
 | `getTrees` (`build="pratchet"`) | `getTrees`, `buildPratchet` | **maximum parsimony** — faithful, parsimony score exact |
 | `getTrees` (`build="pml"`) | `getTrees`, `buildPML` | maximum likelihood — tractable JC approximation (see caveats) |
 | `findSwitches` | `findSwitches`, `countSwitches` | parsimony trait reconstruction (see caveats) |
 | `testPS`, `testSP`, `testSC` | `testPS`, `testSP`, `testSC` | PS / SP / SC migration & differentiation tests |
 | `correlationTest` | `correlationTest`, `runCorrelationTest` | root-to-tip date-randomisation test |
-| `getBootstraps` | `getBootstraps` | non-parametric bootstrap node support |
-| `collapseNodes`, `scaleBranches`, `resolvePolytomies` | same names | tree editing |
-| `getDivergence`, `getPathLengths`, `getNodeSeq`, `getSeq` | same names | tree metrics & sequence retrieval |
-| `calcRF`, `rerootTree`, `readFasta` | same names | Robinson-Foulds, re-rooting, FASTA I/O |
+| `makeSkyline`, `getSkylines`, `plotSkylines` | same names | Bayesian skyline from completed BEAST output — `makeSkyline` **bit-exact** |
+| `getTimeTrees`, `getTimeTreesIterate` | same names | BEAST time-tree orchestrators (require external BEAST — see caveats) |
+| `getBootstraps`, `bootstrapTrees` | same names | bootstrap node support (`bootstrapTrees` deprecated → `findSwitches`) |
+| `downsampleClone`, `sampleClones` | same names | clone down-sampling (seeded for reproducibility) |
+| `collapseNodes`, `scaleBranches`, `resolvePolytomies`, `condenseTrees` | same names | tree editing |
+| `getDivergence`, `checkDivergence`, `getPathLengths` | same names | tree divergence metrics |
+| `getNodeSeq`, `getSeq`, `getAllSeqs`, `getSubTaxa` | same names | sequence / clade retrieval |
+| `calcRF`, `rerootTree` | same names | Robinson-Foulds, re-rooting |
+| `readFasta`, `dfToFasta`, `readModelFile`, `makeModelFile` | same names | FASTA & parsimony-model file I/O |
+| `exportTrees`, `readLineages`, `writeCloneSequences`, `writeLineageFile`, `treesToPDF` | same names | tree / lineage / PDF export |
 | `plotTrees`, `getPalette` | `plotTrees`, `plotTree`, `getPalette` | matplotlib lineage figures |
 
 The parsimony engine (`fitch_score`, `sankoff_score`, `pratchet`, `acctran`, `ancestral_pars`, `fitch_states`) is exposed directly.
+
+### External-binary wrappers intentionally not ported
+
+`buildBeast`, `buildIgphyml`, `buildRAxML`, `readBEAST` and `reconIgPhyML` drive third-party phylogenetics binaries (BEAST, IgPhyML, RAxML) and have **no pure-Python equivalent**, so they are deliberately omitted in line with pydowser's no-external-binary policy. For tree building use the native pure-Python `buildPratchet` (maximum parsimony) and `buildPML` (maximum likelihood) builders instead. The BEAST *orchestrators* `getTimeTrees` / `getTimeTreesIterate` are ported with faithful input-validation logic but raise an informative `NotImplementedError` because they require an external BEAST install; the *pure-algorithm* skyline functions (`makeSkyline`, `getSkylines`, `plotSkylines`) are fully ported and only parse BEAST's text output.
 
 ## R-parity
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pydowser"
-version = "0.1.0"
+version = "0.1.1"
 description = "Pure-Python port of the R/CRAN package dowser - B-cell receptor phylogenetics: lineage trees, measurable evolution, migration/differentiation tests (Immcantation)."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -53,7 +53,7 @@ include = ["pydowser*"]
 exclude = ["tests*", "examples*", "dowser-ref*"]
 
 [tool.setuptools.package-data]
-pydowser = ["data/*.csv"]
+pydowser = ["data/*.csv", "data/imgt_human_vdj/*.fasta"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

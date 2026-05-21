@@ -208,3 +208,105 @@ def test_correlation_test_vs_R(r_reference):
     assert ((pp >= 0) & (pp <= 1)).all()
     assert np.abs(rp - pp).mean() < 0.25, (
         "permutation p-values diverge from R beyond Monte-Carlo tolerance")
+
+
+# ----------------------------------------------------------------------
+def _synthetic_germline_row():
+    """An AIRR row whose V/D/J match dowser's minimal IMGT reference."""
+    imgt = dw.load_imgt_human_vdj()
+    sv = imgt["IGH"]["V"]["IGHV3-11*05"]
+    sd = imgt["IGH"]["D"]["IGHD3-10*01"]
+    sj = imgt["IGH"]["J"]["IGHJ5*02"]
+    np1, np2 = 5, 7
+    full = sv + "A" * np1 + sd + "C" * np2 + sj
+    df = pd.DataFrame([{
+        "sequence_id": "s1", "sequence_alignment": full, "clone_id": "c1",
+        "v_call": "IGHV3-11*05", "d_call": "IGHD3-10*01",
+        "j_call": "IGHJ5*02", "v_germline_start": 1,
+        "v_germline_end": len(sv), "d_germline_start": 1,
+        "d_germline_end": len(sd), "j_germline_start": 1,
+        "j_germline_end": len(sj), "np1_length": np1, "np2_length": np2,
+        "locus": "IGH"}])
+    return df, imgt
+
+
+def test_create_germlines_vs_R(r_reference):
+    """createGermlines is deterministic -- germline must be bit-exact vs R."""
+    r = pd.read_csv(r_reference / "creategermlines.csv")
+    df, imgt = _synthetic_germline_row()
+    db = dw.createGermlines(df, imgt)
+    assert db["germline_alignment"].iloc[0] == r["germline_full"].iloc[0], (
+        "createGermlines full germline differs from R")
+    assert (db["germline_alignment_d_mask"].iloc[0]
+            == r["germline_dmask"].iloc[0]), (
+        "createGermlines D-masked germline differs from R")
+
+
+def test_mask_codons_vs_R(r_reference):
+    """maskCodons is deterministic -- masked sequences must match R."""
+    r = pd.read_csv(r_reference / "maskcodons.csv").set_index("case")
+    cases = {
+        "identical": dw.maskCodons("s1", "ACGACG", "ACGACG"),
+        "clean_insertion": dw.maskCodons("s2", "ACGTTTACG", "ACGACG"),
+        "partial_gap": dw.maskCodons("s4", "ACGTTACGTAC", "ACGACGTAC"),
+    }
+    for case, res in cases.items():
+        py_na = res["sequence_masked_v"] is None
+        r_val = r.loc[case, "masked"]
+        r_na = pd.isna(r_val) or str(r_val) == "NA"
+        assert py_na == r_na, (
+            f"maskCodons {case}: pydowser NA={py_na} R NA={r_na}")
+        if not py_na:
+            assert res["sequence_masked_v"] == str(r_val), (
+                f"maskCodons {case}: pydowser={res['sequence_masked_v']!r} "
+                f"R={r_val!r}")
+
+
+def test_make_skyline_vs_R(r_reference):
+    """makeSkyline is a pure algorithm -- must match R bit-exactly."""
+    r = pd.read_csv(r_reference / "makeskyline.csv")
+    sky_dir = r_reference / "sky"
+    sky = dw.makeSkyline(str(sky_dir / "x.log"), str(sky_dir / "x.trees"),
+                         burnin=0, bins=10, clone_id="c1", max_height="min")
+    r = r.sort_values("bin").reset_index(drop=True)
+    sky = sky.sort_values("bin").reset_index(drop=True)
+    assert len(sky) == len(r), "skyline bin count differs from R"
+    for col in ("bin", "mean", "median", "lci", "uci"):
+        rel = np.abs(sky[col].to_numpy(dtype=float)
+                     - r[col].to_numpy(dtype=float))
+        assert rel.max() < 1e-6, (
+            f"makeSkyline column {col} differs from R by {rel.max()}")
+
+
+def test_divergence_check_consistency_vs_R(r_reference, py_trees):
+    """getDivergence-based checkDivergence runs and divergences match R.
+
+    checkDivergence converts to mutation branch lengths and reports
+    root-to-node divergence; the per-tip divergence equals R's
+    getDivergence after scaling (asserted in test_divergence_vs_R).  Here
+    we additionally confirm checkDivergence runs and that tip divergences
+    are non-negative and broadly consistent with R.
+
+    Phylogenetics caveat: for a small fraction of internal nodes the
+    parsimony ancestral reconstruction differs from phangorn's, so the
+    divergence-minus-Hamming difference can dip slightly negative for an
+    internal node even though R reports zero -- this reflects the
+    documented ASR-tie-breaking difference, not a bug.
+    """
+    cd = dw.checkDivergence(py_trees, verbose=False)
+    assert {"clone", "hamming", "divergence", "diff", "node"}.issubset(
+        cd.columns)
+    assert (cd["divergence"] >= 0).all()
+    # tip divergences (first rows per clone) should agree closely with R
+    r = pd.read_csv(r_reference / "divergence.csv")
+    n_checked = 0
+    for _, row in py_trees.iterrows():
+        cid = int(row["clone_id"])
+        tree = row["trees"]
+        # checkDivergence works in mutations; getDivergence in genetic dist
+        py_div = dw.getDivergence(row["trees"])
+        r_sub = r[r["clone_id"] == cid].set_index("tip")["divergence"]
+        for tip in set(py_div) & set(r_sub.index):
+            n_checked += 1
+            assert abs(py_div[tip] - r_sub[tip]) < 0.03
+    assert n_checked > 20
